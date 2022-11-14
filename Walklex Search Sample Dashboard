@@ -1,0 +1,62 @@
+This is a sample code for a basic dashboard which allows the user to search through the lexicon for a specific string and get fields in the resulting index list
+matching a specific pattern
+
+
+
+<form>
+  <label>Identify Fields with Specific Patterns</label>
+  <fieldset submitButton="true" autoRun="false">
+    <input type="time" token="timeToken">
+      <label></label>
+      <default>
+        <earliest>-15m</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+    <input type="text" token="searchString" searchWhenChanged="false">
+      <label>Search string in raw data (walklex)</label>
+    </input>
+    <input type="dropdown" token="Type" searchWhenChanged="true">
+      <label>Pattern Type</label>
+      <choice value="&quot;Int&quot; and length=11">11-digit Integer</choice>
+      <choice value="&quot;IP&quot;">IP</choice>
+      <choice value="&quot;String&quot;">String</choice>
+    </input>
+  </fieldset>
+  <row>
+    <panel>
+      <table>
+        <search>
+          <query>| walklex index=[yourindex] pattern=*$searchString$* type=term | stats count by index | map maxsearches=5 search="| search index=\"$$index$$\"
+| fields - date*, time*pos, punct* | fieldsummary maxvals=10 | fields field, count, distinct_count, values | eval indexName=\"$$index$$\""
+| rex field=values mode=sed "s/[\[\{\}\]]+//g"
+| eval values=trim(values)
+| rex max_match=10 field=values "\"value\":\"?(?&lt;value&gt;.*?)\",\"count\":\"?(?&lt;valueCount&gt;\w+)\"?"
+| eval valueAndValueCount=mvzip(valueCount,value)
+| mvexpand valueAndValueCount
+| makemv valueAndValueCount delim=","
+| eval valueCount=mvindex(valueAndValueCount,0)
+| eval value=mvindex(valueAndValueCount,1)
+| table field, count, distinct_count, value, valueCount,indexName
+| eval valueCategory=if(isint(value),"Int", if(match(value,"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$$"),"IP",if(isstr(value),"String",if(isnull(value), "No Value","Other"))))
+| table field, valueCategory, count, value, indexName
+| eval maybePN=if(match(value,"[0-3][0-9][0-1][0-9][0-9][0-9]*"), "Yes", "No")
+| eval length=len(value)
+| where valueCategory=$Type$
+| stats sum(count) by indexName, field, valueCategory, length, maybePN</query>
+          <earliest>$timeToken.earliest$</earliest>
+          <latest>$timeToken.latest$</latest>
+          <sampleRatio>1</sampleRatio>
+        </search>
+        <option name="count">100</option>
+        <option name="dataOverlayMode">none</option>
+        <option name="drilldown">none</option>
+        <option name="percentagesRow">false</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="rowNumbers">false</option>
+        <option name="totalsRow">false</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+</form>
