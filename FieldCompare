@@ -1,0 +1,72 @@
+[base search goes here]
+| fields - date_*, linecount, time*pos | fields - date_*, linecount, time*pos | fieldsummary maxvals=10 | fields field, count, distinct_count, values
+| rex field=values mode=sed "s/[\[\{\}\]]+//g"
+| eval values=trim(values)
+| rex max_match=10 field=values "\"value\":\"?(?<value>.*?)\",\"count\":\"?(?<valueCount>\w+)\"?"
+| eval valueAndValueCount=mvzip(valueCount, value)
+| mvexpand valueAndValueCount
+| makemv valueAndValueCount delim=","  
+| eval valueCount=mvindex(valueAndValueCount, 0)
+| eval value=mvindex(valueAndValueCount, 1)
+| table field, count, distinct_count, value, valueCount
+| eval valueCategory = if(isint(value),"int", if(match(value, "^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"), "IP", if(isstr(value), "String", if(isnull(value), "No Value", "Other"))))
+| eval valueCategoryID = if(isint(value),"1", if(match(value, "^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"), "2", if(isstr(value), "3", if(isnull(value), NULL, "4"))))
+| sort  -count, -distinct_count, +field, -valueCount
+| streamstats count(value) as categoryCount by field, valueCategory |stats max(count) as count, max(distinct_count) as distinct_count, mode(valueCategory) as topCategory, max(categoryCount) as topCategoryID, list(value) as value, list(valueCategory) as valueCategory, list(categoryCount) as categoryCount, list(valueCount) as valueCount, list(valueCategoryID) as valueCategoryID by field
+| join type=outer max=0 field
+[| datamodel
+| spath
+| spath output=field path=objects{}.fields{}.displayName
+| spath output=description path=objects{}.fields{}.comment{}.description
+| eval x=mvzip(field,description)
+| table field, description, x, modelName
+| mvexpand x | eval x = split(x,",")
+| eval field=mvindex(x,0)
+| eval description=mvindex(x,1)
+| table field, description, calculation, modelName
+| append 
+[| datamodel
+| spath
+| spath output=field path=objects{}.calculations{}.outputFields{}.displayName
+| spath output=description path=objects{}.calculations{}.outputFields{}.comment{}.description
+| spath output=calculation path=objects{}.calculations{}.expression
+| eval x=mvzip(mvzip(field, description,"§"), calculation,"§")
+| table field, description, calculation, x, modelName
+| mvexpand x
+| eval x = split(x,"§")
+| eval field=mvindex(x,0)
+| eval description=mvindex(x,1)
+| eval calculation=mvindex(x,2)
+| table field, description, calculation, modelName]
+| rename description as fieldDesc
+| dedup field, modelName
+| stats list(modelName) by field ]
+| join type=outer max=0 field
+[
+|rest /services/data/props/fieldaliases | rename title as Name, eai:acl.app as App, eai:acl.owner as Owner
+| eval value = if(match(value, ", "), value, rtrim(replace(value, "(?i)(\w+\s)(as)(\s\w+)", "\1\2\3,"), ","))
+| makemv delim=", " value
+| mvexpand value | eval x = split(value,",") | mvexpand x | eval y = split(x," ")
+| eval field=mvindex(y,0)
+| eval as=mvindex(y,1)
+| eval aliasField=mvindex(y,2) | table field, as, aliasField, App
+| join type=outer max=0 aliasField
+[| datamodel
+| spath
+| spath output=field path=objects{}.fields{}.displayName
+| spath output=description path=objects{}.fields{}.comment{}.description
+| eval x=mvzip(field,description)
+| table field, description, x, modelName
+| mvexpand x | eval x = split(x,",")
+| eval field=mvindex(x,0)
+| eval description=mvindex(x,1)
+| rename field as aliasField
+| rename modelName as aliasModelName, description as aliasDescription, calculation as aliasCalculation
+| table aliasField, aliasDescription, aliasCalculation, aliasModelName
+| dedup aliasField, aliasModelName
+| stats list(aliasModelName), list(App) by aliasField
+]
+]
+| fillnull value="None" modelName aliasField aliasModelName App
+| dedup field modelName aliasField aliasModelName App
+| table field, aliasField, topCategory, App, aliasDescription, list(modelName), list(aliasModelName), value
